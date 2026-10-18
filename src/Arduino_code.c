@@ -306,4 +306,5 @@ void loop() {
 
   Serial.print(" | Score: ");
   Serial.println(bestScore);
+
 }

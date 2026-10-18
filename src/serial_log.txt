@@ -1,0 +1,8 @@
+UV: 100 | IR: 150 | EMA UV: 100.00 | EMA IR: 150.00 | X1: 0.031 | X2: 0.094 | Class: LED | Score: 255
+UV: 102 | IR: 152 | EMA UV: 100.40 | EMA IR: 150.40 | X1: 0.031 | X2: 0.094 | Class: LED | Score: 255
+UV: 250 | IR: 400 | EMA UV: 250.00 | EMA IR: 400.00 | X1: 0.031 | X2: 0.219 | Class: FLUORESCENT | Score: 255
+UV: 252 | IR: 402 | EMA UV: 250.40 | EMA IR: 400.40 | X1: 0.031 | X2: 0.219 | Class: FLUORESCENT | Score: 255
+UV: 0 | IR: 130 | EMA UV: 0.00 | EMA IR: 130.00 | X1: 0.031 | X2: 0.031 | Class: SHADE | Score: 255
+UV: 1 | IR: 132 | EMA UV: 0.20 | EMA IR: 130.40 | X1: 0.031 | X2: 0.031 | Class: SHADE | Score: 255
+UV: 3450 | IR: 27200 | EMA UV: 3450.00 | EMA IR: 27200.00 | X1: 0.969 | X2: 0.969 | Class: SUN | Score: 255
+UV: 3448 | IR: 27190 | EMA UV: 3449.60 | EMA IR: 27198.00 | X1: 0.969 | X2: 0.969 | Class: SUN | Score: 255
