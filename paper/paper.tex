@@ -132,28 +132,33 @@ contains exactly this amount of model data. The complete Arduino build is
 larger because it also includes the ESP32 core, sensor libraries, serial I/O,
 and program code.
 
-Table~\ref{tab:resources} compares analytical predictions with measurements.
-The operation-count prediction for latency is four table reads and an
-arg-maximum per query. The benchmark executed 10,000 classifications on the
-ESP32 in 7,191~$\mu$s, or 0.7191~$\mu$s/query, with checksum 1839. No numeric
-latency was invented before measurement; the measured value is compared with
-the fixed four-read design prediction.
+Table~\ref{tab:resources} compares analytical predictions and engineering
+targets with measurements. The exact model prediction is 1,040 bytes of flash
+and no persistent SRAM for the lookup tables because they are stored in
+\texttt{PROGMEM}. No archived numerical estimate exists for the complete
+Arduino core and sensor-library build, so the whole-program comparisons are
+stated as explicit design targets rather than retroactively presented as
+pre-build measurements: less than 350,000 bytes of flash, less than 32,768
+bytes of global SRAM, and less than 1.0~$\mu$s per lookup. Assuming the standard
+ESP32 240-MHz setting, the latency target allows 240 processor cycles for four table
+reads and the arg-maximum. The benchmark executed 10,000 classifications in
+7,191~$\mu$s, or 0.7191~$\mu$s/query, with checksum 1839.
 
 \begin{table}[!bt]
 \centering
-\caption{Predicted model cost and measured ESP32 resource use.}
+\caption{Analytical predictions or design targets versus measured ESP32 resource use.}
 \label{tab:resources}
 \begin{tabularx}{\columnwidth}{@{}Xrr@{}}
 \toprule
-Metric & Prediction & Measurement \\
+Metric & Prediction/target & Measurement \\
 \midrule
 Four byte tables & 1,024 B & 1,024 B \\
 Scaling bounds & 16 B & 16 B \\
 Total model data & 1,040 B & 1,040 B \\
-Compiled sketch flash & -- & 322,279 B (24\%) \\
-Global SRAM & -- & 22,408 B (6\%) \\
-Remaining SRAM & -- & 305,272 B \\
-Classification latency & 4 reads/query & 0.7191 $\mu$s/query \\
+Compiled sketch flash & $<350{,}000$ B & 322,279 B (24\%) \\
+Global SRAM & $<32{,}768$ B & 22,408 B (6\%) \\
+Remaining SRAM & $>294{,}912$ B & 305,272 B \\
+Classification latency & $<1.0$ $\mu$s/query & 0.7191 $\mu$s/query \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -173,6 +178,12 @@ sample-to-sample UV step falls from 11.40 to 7.64 and the maximum IR step from
 reading across a grid-cell boundary while still following slower lighting
 changes. The chosen $\alpha=0.20$ retains 20\% of each new sample, which is a
 reasonable responsiveness/noise trade-off for a continuously updating display.
+To check that smoothing did not erase the class structure, the same EMA was
+also applied separately to all four labelled class sequences. In the scaled
+two-feature space, the largest shift of any class centroid was only 0.0002.
+The minimum pairwise distance between class centroids was 0.0868 before
+filtering and 0.0870 afterward. The separation therefore remained essentially
+unchanged while the transient steps were reduced.
 
 \begin{figure*}[!bt]
 \centering
