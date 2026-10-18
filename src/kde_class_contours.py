@@ -27,7 +27,9 @@ xx, yy, grid_points = make_grid()
 
 kdes = {c: fit_density(X[labels == c], BANDWIDTH) for c in classes}
 surfaces = {
-    c: normalise_peak(evaluate_on_grid(kdes[c], grid_points, xx))
+    c: np.rint(
+        normalise_peak(evaluate_on_grid(kdes[c], grid_points, xx)) * 255
+    ).astype(np.uint8)
     for c in classes
 }
 np.savez("surfaces.npz", **{f"c{c}": surface for c, surface in surfaces.items()})
