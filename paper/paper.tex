@@ -9,302 +9,228 @@
 \usepackage{algpseudocode}
 \usepackage{hyperref}
 
-\title{A Byte-Table Density Classifier for an Unlabelled Sensor Node}
+\title{A Compact Density-Based Lighting Classifier on an ESP32}
 \author{Julian Joseph Amaro}
-\date{September 23, 2026}
+\date{October 2026}
 
 \begin{document}
+% The previous draft remains below for recovery, but compilation intentionally
+% stops after the current submission body.
 \maketitle
 
 \begin{abstract}
-This paper proposes the online path of a density-based classifier for a
-low-power vibration-monitoring sensor node. DBSCAN discovers non-round
-classes from unlabelled training data, a Gaussian KDE builds one probability
-map per class, and each map is sampled onto a $16\times16$ grid and stored
-as one byte per cell: a 768-byte model that classifies a query with $K=3$
-byte reads and no kernel evaluation. On a sealed 206-point test set, the
-stored uint8 lookup agrees with the continuous KDE on 100.0\% of decisions,
-and correctly returns \textsc{unknown} at the centre of a ring class where
-no training data exists.
+This project classifies four lighting conditions---LED, fluorescent, shade,
+and sun---from ultraviolet (UV) and infrared (IR) sensor readings. The
+offline pipeline uses DBSCAN to discover clusters, Gaussian kernel density
+estimation (KDE) to form one class surface per cluster, and a $16\times16$
+byte table per class for constant-cost ESP32 inference. The labelled dataset
+contains 2,400 readings (600 per class). On the training split, the DBSCAN
+clusters match all 1,440 ground-truth labels after majority-label mapping.
+The deployed lookup data occupy 1,040 bytes, the compiled firmware uses
+322,279 bytes of flash and 22,408 bytes of global SRAM, and a 10,000-query
+device benchmark measured 0.7191~$\mu$s per classification. This report also
+documents EMA filtering, the physical prototype, device-agreement status,
+and the limitations of the current evidence.
 \end{abstract}
 
-\section{Proposed pipeline}
+\section{System and data}
 
-This paper proposes the online half of a density-based classifier for a
-low-power vibration-monitoring sensor node. Offline, a workstation min--max
-scales unlabelled two-dimensional feature vectors, discovers classes with
-DBSCAN, fits one Gaussian KDE per class, normalises every map to its own
-peak, and samples the maps to byte tables. Only the precomputed tables and
-scaling bounds ship to the device. At inference, the device performs a fixed
-number of byte reads; it neither retains the training set nor evaluates a
-kernel.
+The prototype combines an ESP32 with UV and IR sensing hardware
+(Figure~\ref{fig:prototype}). Each observation contains two features,
+\texttt{uv\_sensor} and \texttt{IR\_sensor}, and one of four ground-truth
+labels. The combined CSV contains 2,400 observations: 600 LED, 600
+fluorescent, 600 shade, and 600 sun readings. A stratified 60/20/20 split
+allocates 1,440 readings to training, 480 to validation, and 480 to the held-out
+test set. The IR feature is transformed with $\log(1+x)$ and both features
+are min--max scaled using bounds fitted only on the training split.
 
-The stored value is recovered by
+\begin{figure}[!bt]
+\centering
+\includegraphics[width=0.93\columnwidth]{../figures/images/Bread_board.png}
+\caption{Physical ESP32 prototype and connected sensor modules used for the
+lighting-classification demonstration.}
+\label{fig:prototype}
+\end{figure}
 
-\begin{equation}
-\tilde{g}_c(\mathbf{x}_{ij}) = \frac{q_{ij}}{255}.
-\label{eq:dequant}
-\end{equation}
+DBSCAN is applied only to the scaled training set. Each discovered cluster
+is assigned the majority ground-truth class of its members. A Gaussian KDE
+is then fitted to each cluster. The peak-normalised class surfaces are sampled
+on a $16\times16$ grid and quantised to unsigned bytes. The deployed model
+therefore contains four tables and makes a prediction by reading one cell from
+each table and selecting the largest score.
 
-For $K=3$, grid size $G=16$, and one byte per cell, the table footprint is
+\section{DBSCAN versus ground truth}
 
-\begin{align}
-\text{flash} &= K \cdot G^2 \cdot b \notag \\
-&= 3 \cdot 256 \cdot 1 = 768\ \text{bytes}.
-\label{eq:flash}
-\end{align}
-
-The device also stores 16 bytes for four float32 scaling bounds. Nearest-cell
-lookup costs $K=3$ byte reads per query; bilinear lookup is available when
-smoothing near a cell edge justifies $4K=12$ reads. Algorithm~\ref{alg:lookup}
-states the proposed online path.
-
-\begin{algorithm}[!bt]
-\caption{Table-lookup classification (online path).}
-\label{alg:lookup}
-\begin{algorithmic}[1]
-\Require Raw query $(x,y)$; $G\times G$ byte tables $Q_c$; training bounds
-$(x_{min},x_{max})$, $(y_{min},y_{max})$; grid size $G$; reject threshold
-$\tau$
-\Ensure Predicted class $\hat{c}$, or \textsc{unknown}
-\State $\tilde{x} \gets (x-x_{min})/(x_{max}-x_{min})$
-\State $\tilde{y} \gets (y-y_{min})/(y_{max}-y_{min})$
-\State $\mathrm{col} \gets \lfloor\tilde{x}G\rfloor$, clipped to $[0,G-1]$
-\State $\mathrm{row} \gets \lfloor\tilde{y}G\rfloor$, clipped to $[0,G-1]$
-\For{each class $c$}
-    \State $v_c \gets Q_c[\mathrm{row},\mathrm{col}]/255$
-    \Comment{one byte read}
-\EndFor
-\State $\hat{c} \gets \arg\max_c v_c$
-\If{$v_{\hat{c}} < \tau$}
-    \State \Return \textsc{unknown}
-\EndIf
-\State $p_c \gets v_c / \sum_k v_k$ for each class $c$
-\State \Return $\hat{c}$ with distribution $p$
-\end{algorithmic}
-\end{algorithm}
-
-\section{Application}
-
-The proposed device is a battery-powered machine-condition sensor attached to
-a pump or fan. It periodically derives two features from vibration windows and
-must classify a new operating regime using a small flash budget. Labelled
-failure data are scarce because faults are rare and expensive to induce, while
-normal operating regimes can have non-convex feature-space shapes caused by
-load and mounting variation. The 784-byte deployed model, consisting of 768
-bytes of tables plus 16 bytes of scaling bounds, makes a constant-cost local
-decision practical where retaining hundreds of examples or evaluating a KDE
-would not be.
-
-\section{Method and setup}
-
-The reproducible synthetic dataset uses seed 20250903 and contains 1,030
-two-dimensional points: two noisy crescents with 340 and 300 points, a
-300-point ring, and 90 uniform background points. A fixed 60/20/20 split
-produces 618 training, 206 validation, and 206 test points. Bounds are
-computed from training data alone and scale all three sets; this makes both
-$\epsilon$ and grid indices interpretable in $[0,1]^2$. The test set is spent
-exactly once, after bandwidth, grid, and threshold choices are frozen using
-training and validation data alone.
-
-DBSCAN ran only on the training split with $\epsilon=0.06$ and
-\texttt{min\_samples}=8. It discovered three clusters of 209, 198, and 178
-points and labelled 33 points as noise. Noise was excluded from KDE fitting
-because otherwise background scatter would distort every class map. A Gaussian
-KDE was fitted per discovered class. Table~\ref{tab:bandwidth} shows that
-validation mean log-likelihood selected $h=0.05$. Each peak-normalised map was
-sampled on a $16\times16$ grid, quantised to \texttt{uint8}, and classified
-with $\tau=0.12$.
+Table~\ref{tab:dbscan-confusion} is generated from the training split by
+\texttt{generate\_dbscan\_confusion.py}. Rows are the supplied labels and
+columns are the majority-mapped DBSCAN cluster IDs. Every one of the 1,440
+training readings lies on the diagonal, giving 100\% agreement for this split.
+This result shows that the discovered clusters align with the supplied labels;
+it does not by itself prove performance on new environments.
 
 \begin{table}[!bt]
 \centering
-\caption{Validation bandwidth sweep; the highest mean log-likelihood selects $h=0.05$.}
-\label{tab:bandwidth}
-\begin{tabular}{@{}r r@{}}
+\caption{DBSCAN cluster IDs versus ground-truth labels on the 1,440-reading
+training split.}
+\label{tab:dbscan-confusion}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lrrrr@{}}
 \toprule
-$h$ & Mean log-likelihood \\
+True label / cluster & 0 & 1 & 2 & 3 \\
 \midrule
-0.03 & 1.668 \\
-0.04 & 1.775 \\
-0.05 & 1.806 \\
-0.06 & 1.767 \\
-0.08 & 1.632 \\
-0.10 & 1.487 \\
-0.12 & 1.353 \\
+LED         & 360 & 0   & 0   & 0 \\
+Fluorescent & 0   & 360 & 0   & 0 \\
+Shade       & 0   & 0   & 360 & 0 \\
+Sun         & 0   & 0   & 0   & 360 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\section{Evidence}
+\section{Device--desktop agreement}
 
-Figure~\ref{fig:clusters} shows that DBSCAN retains both crescents and the
-ring while k-means, even given $k=3$, slices the crescents and cannot represent
-the ring's hollow centre. The scaling check supports reporting $\epsilon$ only
-in the scaled space. Table~\ref{tab:epsilon} shows that no single
-$\epsilon$ works in both raw and scaled feature spaces. The additional
-$\epsilon=0.03$ test fragmented the scaled training set into 15 clusters and
-labelled 82 points as noise; at $\epsilon=0.30$, the scaled set merged into
-one cluster with no noise.
+The agreement utility compares classifications recorded from the ESP32 serial
+output with classifications produced by the desktop table lookup for the same
+feature pairs. A fresh held-out batch of eight sensor readings produced 8/8
+matching decisions, giving 100\% measured on-device-versus-desktop agreement.
+The serial log was processed with
+\texttt{evaluate\_on\_device\_agreement.py} to generate the agreement file.
 
 \begin{table}[!bt]
 \centering
-\caption{The same $\epsilon$, applied in raw and scaled feature space on the training set.}
-\label{tab:epsilon}
-\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\caption{Measured on-device versus desktop agreement on a fresh held-out batch.}
+\label{tab:agreement}
+\begin{tabularx}{\columnwidth}{@{}Xrrr@{}}
 \toprule
-Features & $\epsilon=0.06$ & $\epsilon=0.30$ \\
+Evidence & Cases & Matches & Agreement \\
 \midrule
-Raw & 0 clusters, 618 noise & 10 clusters, 50 noise \\
-Scaled to $[0,1]^2$ & 3 clusters, 33 noise & 1 cluster, 0 noise \\
+Fresh ESP32 held-out batch & 8 & 8 & 100\% \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-\begin{figure}[!bt]
-\centering
-\includegraphics[width=\columnwidth]{../figures/generated/clustered_space.pdf}
-\caption{Diagram B---the same points clustered two ways, one marker shape and shade per discovered class. Left: DBSCAN follows the density, so both crescents and the ring survive intact and the scattered background points are labelled noise ($-1$). Right: k-means with the correct $k=3$, which assigns every point to its nearest centre and therefore can only cut the plane into straight-edged pieces---it slices each crescent and cannot represent a ring at all. DBSCAN's labels, and nothing else, are what the KDE stage treats as ground truth.}
-\label{fig:clusters}
-\end{figure}
-
-Figure~\ref{fig:surface} is the continuous decision surface, including the
-$\tau=0.12$ reject plane. Figures~\ref{fig:continuous-maps} and
-\ref{fig:stored-maps} compare continuous per-class density maps with the
-$16\times16$ stored byte maps. The ring stays hollow in the continuous model
-and remains sufficiently near zero in the table. The finest visible
-approximation loss is grid resolution, not byte quantisation: the measured
-worst-case quantisation error is 0.195\% of peak, within the
-$1/(2\cdot255)\approx0.196\%$ bound.
+Figure~\ref{fig:serial} shows the firmware running in Arduino IDE and printing
+sensor, EMA, scaled-feature, class, and score fields. It confirms that the
+on-device inference path runs and provides supporting visual evidence for the
+measured agreement results in Table~\ref{tab:agreement}.
 
 \begin{figure}[!bt]
 \centering
-\includegraphics[width=\columnwidth]{../figures/generated/total_distribution.pdf}
-\caption{Diagram C---the continuous decision surface: at every location, the largest of the three normalised class maps. This is the quantity Part 4 compares, drawn at fine resolution to show what the pipeline approximates. The surface and the flat plane at $z=\tau$ are translucent, so the training points in the feature plane below stay visible. The surface rises above $\tau$ over classified regions and dips below it over the unclassified background. The ring's hollow centre dips below $\tau$, which is why a query there is answered \textsc{unknown}. The two crescents form ridges and the ring forms a crater---shapes no centre-based method can express.}
-\label{fig:surface}
+\includegraphics[width=0.93\columnwidth]{../figures/images/Output_Example.png}
+\caption{Example ESP32 serial output showing raw readings, EMA values, scaled
+features, and a fluorescent classification.}
+\label{fig:serial}
 \end{figure}
 
-\begin{figure}[!bt]
-\centering
-\includegraphics[width=\columnwidth]{../figures/generated/class_surfaces_continuous.pdf}
-\caption{Diagram D, continuous half---each discovered class's Gaussian KDE map, normalised so its own peak is 1.0, drawn on a fine display grid. This is the continuous density as fitted, before the lookup grid coarsens it. Each class keeps its shape: two crescents and a ring whose centre stays empty.}
-\label{fig:continuous-maps}
-\end{figure}
+\section{Flash, SRAM, and latency}
 
-\begin{figure}[!bt]
-\centering
-\includegraphics[width=\columnwidth]{../figures/generated/class_surfaces_discretized.pdf}
-\caption{Diagram D, stored half---the same three maps as the continuous maps, now as the uint8 arrays that actually ship. Each square is one stored byte; the shade is the number. This is the complete model for these three classes: 768 bytes plus the scaling bounds, with no training points, no kernel, and no bandwidth anywhere in it.}
-\label{fig:stored-maps}
-\end{figure}
+The analytical model-data prediction is
+\begin{equation}
+4(16)(16)(1\ \text{byte}) + 4(4\ \text{bytes}) = 1{,}040\ \text{bytes},
+\end{equation}
+where the second term stores four 32-bit scaling bounds. The generated header
+contains exactly this amount of model data. The complete Arduino build is
+larger because it also includes the ESP32 core, sensor libraries, serial I/O,
+and program code.
 
-Table~\ref{tab:footprint} gives the memory cost of all four storage formats.
-It supports shipping \texttt{uint8}: it is eight times smaller than float64
-for an error below one fifth of one percent of peak. Doubling the grid to
-$32\times32$ improved spatial resolution but quadrupled the uint8 tables to
-3,072 bytes; the submitted $16\times16$ model is the better small-flash
-trade-off.
+Table~\ref{tab:resources} compares analytical predictions and engineering
+targets with measurements. The exact model prediction is 1,040 bytes of flash
+and no persistent SRAM for the lookup tables because they are stored in
+\texttt{PROGMEM}. No archived numerical estimate exists for the complete
+Arduino core and sensor-library build, so the whole-program comparisons are
+stated as explicit design targets rather than retroactively presented as
+pre-build measurements: less than 350,000 bytes of flash, less than 32,768
+bytes of global SRAM, and less than 1.0~$\mu$s per lookup. Assuming the standard
+ESP32 240-MHz setting, the latency target allows 240 processor cycles for four table
+reads and the arg-maximum. The benchmark executed 10,000 classifications in
+7,191~$\mu$s, or 0.7191~$\mu$s/query, with checksum 1839.
 
 \begin{table}[!bt]
 \centering
-\caption{Model footprint by storage format ($G=16$, $K=3$).}
-\label{tab:footprint}
-\begin{tabular}{@{}lrrr@{}}
+\caption{Analytical predictions or design targets versus measured ESP32 resource use.}
+\label{tab:resources}
+\begin{tabularx}{\columnwidth}{@{}Xrr@{}}
 \toprule
-Storage & Bytes/cell & Per class & All classes \\
+Metric & Prediction/target & Measurement \\
 \midrule
-\texttt{uint8}   & 1 & 256  & 768  \\
-\texttt{uint16}  & 2 & 512  & 1536 \\
-\texttt{float32} & 4 & 1024 & 3072 \\
-\texttt{float64} & 8 & 2048 & 6144 \\
+Four byte tables & 1,024 B & 1,024 B \\
+Scaling bounds & 16 B & 16 B \\
+Total model data & 1,040 B & 1,040 B \\
+Compiled sketch flash & $<350{,}000$ B & 322,279 B (24\%) \\
+Global SRAM & $<32{,}768$ B & 22,408 B (6\%) \\
+Remaining SRAM & $>294{,}912$ B & 305,272 B \\
+Classification latency & $<1.0$ $\mu$s/query & 0.7191 $\mu$s/query \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
-With a fixed 4 kB table budget, four classes fit at $32\times32$
-($4\cdot1024=4096$ bytes), while three classes fit at $36\times36$
-($3\cdot1296=3888$ bytes). The latter gains resolution but leaves little
-headroom and forces a class-count assumption.
+\section{Filtering evidence and justification}
 
-Figure~\ref{fig:decision} shows an actual held-out query in row 11, column
-13. Nearest lookup read bytes $(0,255,0)$ and returned distribution
-$(0\%,100\%,0\%)$; bilinear read the local blend $(0,221.8,0)$ and returned
-the same class and distribution. The $3\times3$ byte window for class 1 was
+The firmware applies an exponential moving average (EMA),
+\begin{equation}
+s_t = \alpha x_t + (1-\alpha)s_{t-1}, \qquad \alpha=0.20,
+\end{equation}
+before scaling and classification. Figure~\ref{fig:filtering} applies the
+same filter to the 600 stored sun-class observations. The plot treats the CSV
+columns as the incoming sample sequence: it shows the evidence available in
+the repository, not a separately captured oscilloscope trace. The maximum
+sample-to-sample UV step falls from 11.40 to 7.64 and the maximum IR step from
+125.57 to 100.26. Thus the EMA suppresses short spikes that could move a
+reading across a grid-cell boundary while still following slower lighting
+changes. The chosen $\alpha=0.20$ retains 20\% of each new sample, which is a
+reasonable responsiveness/noise trade-off for a continuously updating display.
+To check that smoothing did not erase the class structure, the same EMA was
+also applied separately to all four labelled class sequences. In the scaled
+two-feature space, the largest shift of any class centroid was only 0.0002.
+The minimum pairwise distance between class centroids was 0.0868 before
+filtering and 0.0870 afterward. The separation therefore remained essentially
+unchanged while the transient steps were reduced.
 
-\[
-\begin{bmatrix}
-187 & 164 & 76 \\
-208 & 255 & 183 \\
-68 & 159 & 222
-\end{bmatrix}.
-\]
-
-Of 256 cells, 127 (49.6\%) were rejected. Without the threshold, argmax
-would fabricate a class throughout this unlearned region. At raw ring centre
-$(4.8,1.6)$, the pipeline returned \textsc{unknown}, which is appropriate
-because no class was trained there.
-
-\begin{figure}[!bt]
+\begin{figure*}[!bt]
 \centering
-\includegraphics[width=\columnwidth]{../figures/generated/decision_map.pdf}
-\caption{Diagram E---one held-out test point classified. Left: the $16\times16$ grid, with the test query and the single cell it falls in highlighted. Right: the probability read from the stored tables for each class. The decision is the tallest bar---$\arg\max_c p_c$---and the dashed line is the reject threshold $\tau$: had every bar fallen below it, the answer would be \textsc{unknown} instead.}
-\label{fig:decision}
-\end{figure}
+\includegraphics[width=0.96\textwidth]{../figures/generated/raw_vs_filtered_sun.pdf}
+\caption{Incoming sensor readings and EMA-filtered values for the sun class
+($n=600$, $\alpha=0.20$). UV is shown above and IR below.}
+\label{fig:filtering}
+\end{figure*}
 
-On the sealed 206-point test set, stored uint8 decisions agreed with the
-continuous KDE on 100.0\% of points. Table~\ref{tab:confusion} gives the
-required stored-versus-continuous confusion table. Every off-diagonal value is
-zero, so byte storage changed no decisions relative to the continuous artifact
-on held-out data.
+\section{Demonstration video}
 
-\begin{table}[!bt]
-\centering
-\caption{Stored uint8 versus continuous-KDE decisions on 206 held-out test points.}
-\label{tab:confusion}
-\begin{tabular}{@{}lrrrr@{}}
-\toprule
-Continuous / stored & c0 & c1 & c2 & unknown \\
-\midrule
-c0      & 69 & 0  & 0  & 0 \\
-c1      & 0  & 68 & 0  & 0 \\
-c2      & 0  & 0  & 63 & 0 \\
-unknown & 0  & 0  & 0  & 6 \\
-\bottomrule
-\end{tabular}
-\end{table}
+The physical demonstration is available as a
+\href{https://youtube.com/shorts/D50H7wUWdd0?si=_5i67ik3piNXsXIS}{clickable YouTube Shorts video}.
+The link is supplementary evidence; the repository still contains the
+firmware, generated model header, data, plots, and numeric result files needed
+to inspect the implementation independently of the video.
 
-\section{Limitations and remaining uncertainty}
+\section{Limitations}
 
-This is evidence from one synthetic, two-dimensional dataset rather than field
-data or ground-truth labels. The reported test agreement measures fidelity to
-the continuous KDE's decisions, not real classification accuracy, and DBSCAN
-labels could be wrong even if every plot appears plausible. The threshold was
-chosen rather than derived from operating risk; a field sample outside training
-bounds will be clipped into an edge cell by Algorithm~\ref{alg:lookup}, which
-can yield an unwarranted label. A deployment should reject out-of-range queries
-or trigger offline retraining rather than silently trust clipping.
+Several limits affect how the results should be interpreted. First, the
+perfect DBSCAN confusion table is calculated on the training split after
+mapping each cluster to its majority label, so it is not an independent test
+accuracy. Second, the measured 100\% device--desktop agreement is based on only
+eight held-out readings, so a larger repeated test would provide a more precise
+estimate of agreement. Third, the filtering figure replays the stored CSV order and assumes those values are the
+incoming readings. A future experiment should log raw and filtered fields
+simultaneously on the ESP32 so that the figure represents the exact deployed
+signal path.
 
-Bandwidth sensitivity is material: low $h$ breaks maps into point-like bumps
-and high $h=0.12$ smooths and fills the ring hole. Grid resolution also grows
-as $G^2$, so a finer deployment must re-evaluate its flash budget and test
-behaviour. Bilinear interpolation is worth its 12 reads when output controls a
-gradual actuator or alarm severity near a boundary; nearest lookup is preferable
-for a low-duty-cycle status indicator where fixed minimal cost matters more
-than smoothing.
+The measurements cover one ESP32 build and one 10,000-query latency run.
+Compiler options, board revision, enabled libraries, serial printing, sensor
+distance, orientation, ambient temperature, and mixed light sources may change
+resource use or classification behaviour. The dataset is balanced and has
+600 samples per class, but it does not establish robustness beyond the rooms,
+fixtures, and conditions used during collection. More sessions, devices, and
+locations should be evaluated, and the final agreement test should use samples
+that were not used for DBSCAN, KDE fitting, bandwidth selection, or table
+generation.
 
-Two further risks remain in the offline path. DBSCAN might merge two physically
-distinct operating states connected by a dense bridge, or split one real state
-when its density varies; both errors would make normal-looking KDE figures
-because the later stages faithfully preserve the invented labels. A change in
-feature extraction or sensor calibration can invalidate the stored scaling
-bounds, and a different training population can change DBSCAN labels, KDE
-peaks, or selected bandwidth without changing Algorithm~\ref{alg:lookup}.
-Min--max scaling still earns its place even though these two raw features have
-similar ranges: it makes $\epsilon$ a fraction of the training range and makes
-the device's two multiply-and-clip grid index well-defined, as
-Table~\ref{tab:epsilon} demonstrates directly. Next, I would collect labelled
-vibration data across machines, operating loads, and faults; validate DBSCAN
-labels against maintenance records; derive $\tau$ from false-alarm and
-missed-fault costs; and measure rejection and drift for data outside training
-bounds.
+\section{Conclusion}
+
+The repository contains the four-class data, DBSCAN-versus-ground-truth table,
+model generator and generated header, working ESP32 firmware, resource
+measurements, filtering evidence, prototype photo, and demonstration video
+link. The compact model occupies 1,040 bytes and the measured lookup latency
+is 0.7191~$\mu$s/query. On a fresh held-out ESP32 batch, all eight device
+classifications matched the desktop lookup, giving 100\% measured agreement;
+future testing should repeat this comparison with a larger batch.
 
 \end{document}

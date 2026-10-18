@@ -1,0 +1,8 @@
+metric,predicted_value,measured_value,unit,status,method
+model_table_flash,1024,1024,bytes,complete,4 classes x 16 x 16 x 1 byte
+scaling_bounds_flash,16,16,bytes,complete,4 float32 bounds x 4 bytes
+total_model_data_flash,1040,1040,bytes,complete,table plus scaling bounds
+compiled_sketch_flash,,322279,bytes,complete,Arduino CLI ESP32 build; 24 percent of 1310720 bytes
+compiled_global_sram,,22408,bytes,complete,Arduino CLI ESP32 build; 6 percent of 327680 bytes
+compiled_remaining_sram,,305272,bytes,complete,Arduino CLI ESP32 build summary
+classification_latency,,0.7191,microseconds/query,complete,ESP32 benchmark; 10000 queries; total_us=7191; checksum=1839
